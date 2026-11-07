@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ThreatLens — Cyber Threat Intelligence Platform | Sentinova</title>
+
+  <!-- Tailwind CSS & Google Fonts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Chart.js & Leaflet Map -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              950: '#070b14',
+              900: '#0d1527',
+              850: '#111b33',
+              800: '#172342',
+              700: '#1f305b',
+              accent: '#38bdf8',
+            },
+            severity: {
+              critical: '#ef4444',
+              high: '#f97316',
+              medium: '#f59e0b',
+              low: '#10b981',
+              info: '#64748b'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #070b14;
+      color: #e2e8f0;
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0d1527;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1f305b;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #38bdf8;
+    }
+    .neon-glow-red {
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.25);
+    }
+    .neon-glow-blue {
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.25);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans selection:bg-brand-accent selection:text-brand-950">
+
+  <!-- TOP HEADER SHELL -->
+  <header class="h-16 border-b border-brand-800 bg-brand-900/90 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between">
+    <!-- Brand -->
+    <div class="flex items-center space-x-4">
+      <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-accent via-blue-600 to-indigo-800 flex items-center justify-center shadow-lg shadow-sky-500/20">
+        <i data-lucide="shield-alert" class="w-6 h-6 text-white"></i>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <span class="font-bold text-lg tracking-wider text-white">THREAT<span class="text-brand-accent">LENS</span></span>
+          <span class="text-xs px-2 py-0.5 rounded bg-brand-800 text-sky-300 font-mono border border-brand-700">v1.0 PRD</span>
+        </div>
+        <p class="text-[11px] text-slate-400 font-medium">SENTINOVA SECURITY SYSTEMS</p>
+      </div>
+    </div>
+
+    <!-- Global Search -->
+    <div class="flex-1 max-w-xl mx-8">
+      <div class="relative">
+        <i data-lucide="search" class="w-4 h-4 absolute left-3.5 top-3 text-slate-400"></i>
+        <input
+          id="global-search-input"
+          type="text"
+          placeholder="Search IP, domain, hash (SHA256), CVE, technique... (Press / to search)"
+          class="w-full bg-brand-950/80 border border-brand-800 rounded-lg pl-10 pr-12 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all font-mono"
+        />
+        <kbd class="absolute right-3 top-2.5 px-1.5 py-0.5 text-[10px] font-mono bg-brand-800 text-slate-400 rounded border border-brand-700">/</kbd>
+      </div>
+    </div>
+
+    <!-- Persona Switcher & Live Connection Status -->
+    <div class="flex items-center space-x-4">
+      <!-- WebSocket Status Indicator -->
+      <div class="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-brand-950 border border-brand-800 text-xs">
+        <span id="ws-indicator" class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span id="ws-text" class="text-slate-300 font-mono text-[11px]">LIVE STREAM</span>
+      </div>
+
+      <!-- Persona Dropdown -->
+      <div class="flex items-center space-x-2 bg-brand-850 border border-brand-700/60 rounded-lg px-3 py-1.5">
+        <i data-lucide="user-check" class="w-4 h-4 text-brand-accent"></i>
+        <select id="persona-select" class="bg-transparent text-xs text-white focus:outline-none cursor-pointer font-medium">
+          <option value="analyst" class="bg-brand-900 text-white">Priya Nair (Tier-2 SOC Analyst)</option>
+          <option value="ciso" class="bg-brand-900 text-white">Rachel Adeyemi (CISO / Executive)</option>
+          <option value="ir_lead" class="bg-brand-900 text-white">Daniel Okafor (Incident Response Lead)</option>
+          <option value="hunter" class="bg-brand-900 text-white">Mei Lin Tan (Threat Hunter)</option>
+          <option value="admin" class="bg-brand-900 text-white">Alex Rivera (Administrator)</option>
+        </select>
+      </div>
+
+      <!-- Quick Export Menu -->
+      <button onclick="exportSTIX()" title="Export STIX 2.1 Bundle" class="px-2.5 py-1.5 bg-brand-800 hover:bg-brand-700 text-slate-200 rounded text-xs flex items-center space-x-1 border border-brand-700 transition-colors">
+        <i data-lucide="download" class="w-3.5 h-3.5 text-brand-accent"></i>
+        <span>STIX 2.1</span>
+      </button>
+      <button onclick="exportCSV()" title="Export CSV" class="px-2.5 py-1.5 bg-brand-800 hover:bg-brand-700 text-slate-200 rounded text-xs flex items-center space-x-1 border border-brand-700 transition-colors">
+        <i data-lucide="file-spreadsheet" class="w-3.5 h-3.5 text-emerald-400"></i>
+        <span>CSV</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- NAVIGATION TABS -->
+  <nav class="bg-brand-900 border-b border-brand-800/80 px-6 flex items-center space-x-1 overflow-x-auto text-sm">
+    <button onclick="switchTab('soc')" id="tab-soc" class="tab-btn px-4 py-3 font-medium border-b-2 border-brand-accent text-brand-accent flex items-center space-x-2 transition-all">
+      <i data-lucide="crosshair" class="w-4 h-4"></i>
+      <span>SOC Analyst Triage</span>
+      <span id="badge-alerts-count" class="ml-1.5 px-1.5 py-0.2 bg-red-500/20 text-red-400 text-xs font-mono rounded-full border border-red-500/30">0</span>
+    </button>
+    <button onclick="switchTab('executive')" id="tab-executive" class="tab-btn px-4 py-3 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition-all">
+      <i data-lucide="trending-up" class="w-4 h-4"></i>
+      <span>Executive Overview</span>
+    </button>
+    <button onclick="switchTab('incidents')" id="tab-incidents" class="tab-btn px-4 py-3 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition-all">
+      <i data-lucide="flame" class="w-4 h-4"></i>
+      <span>Incident Response</span>
+      <span id="badge-incidents-count" class="ml-1.5 px-1.5 py-0.2 bg-amber-500/20 text-amber-400 text-xs font-mono rounded-full border border-amber-500/30">1</span>
+    </button>
+    <button onclick="switchTab('hunter')" id="tab-hunter" class="tab-btn px-4 py-3 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition-all">
+      <i data-lucide="radar" class="w-4 h-4"></i>
+      <span>Threat Hunting</span>
+    </button>
+    <button onclick="switchTab('map')" id="tab-map" class="tab-btn px-4 py-3 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition-all">
+      <i data-lucide="globe" class="w-4 h-4"></i>
+      <span>Global Attack Heatmap</span>
+    </button>
+    <button onclick="switchTab('feeds')" id="tab-feeds" class="tab-btn px-4 py-3 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition-all">
+      <i data-lucide="radio" class="w-4 h-4"></i>
+      <span>Threat Feeds (6)</span>
+    </button>
+    <button onclick="switchTab('audit')" id="tab-audit" class="tab-btn px-4 py-3 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition-all">
+      <i data-lucide="file-check" class="w-4 h-4"></i>
+      <span>Audit Log</span>
+    </button>
+  </nav>
+
+  <!-- MAIN VIEWPORT CONTAINER -->
+  <main class="flex-1 p-6 relative overflow-y-auto">
+
+    <!-- TOAST NOTIFICATIONS POPUP -->
+    <div id="toast-container" class="fixed bottom-6 right-6 z-50 flex flex-col space-y-3 max-w-sm pointer-events-none"></div>
+
+    <!-- ========================================== -->
+    <!-- 1. SOC ANALYST DASHBOARD (PRIYA NAIR) -->
+    <!-- ========================================== -->
+    <section id="view-soc" class="view-panel space-y-6">
+      <!-- Live Counter Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-semibold">New Alerts (Live)</span>
+            <span class="p-2 bg-red-500/10 text-red-400 rounded-lg"><i data-lucide="bell-ring" class="w-4 h-4"></i></span>
+          </div>
+          <div class="text-3xl font-bold font-mono text-white mt-2" id="soc-stat-new-alerts">0</div>
+          <p class="text-xs text-slate-400 mt-1 flex items-center"><span class="text-red-400 mr-1">●</span> Needs triage</p>
+        </div>
+
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-semibold">Unassigned Alerts</span>
+            <span class="p-2 bg-amber-500/10 text-amber-400 rounded-lg"><i data-lucide="user-x" class="w-4 h-4"></i></span>
+          </div>
+          <div class="text-3xl font-bold font-mono text-white mt-2" id="soc-stat-unassigned">0</div>
+          <p class="text-xs text-slate-400 mt-1">Pending analyst ownership</p>
+        </div>
+
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-semibold">Critical IOCs (Score ≥ 80)</span>
+            <span class="p-2 bg-purple-500/10 text-purple-400 rounded-lg"><i data-lucide="skull" class="w-4 h-4"></i></span>
+          </div>
+          <div class="text-3xl font-bold font-mono text-white mt-2" id="soc-stat-critical">0</div>
+          <p class="text-xs text-purple-300 mt-1">High-confidence active threats</p>
+        </div>
+
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-slate-400 uppercase tracking-wider font-semibold">Connected Feeds</span>
+            <span class="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg"><i data-lucide="activity" class="w-4 h-4"></i></span>
+          </div>
+          <div class="text-3xl font-bold font-mono text-emerald-400 mt-2" id="soc-stat-feeds">6 / 6</div>
+          <p class="text-xs text-emerald-500/80 mt-1 flex items-center">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span> Aggregation active
+          </p>
+        </div>
+      </div>
+
+      <!-- Priority Triage Alert Queue -->
+      <div class="bg-brand-900 border border-brand-800 rounded-xl overflow-hidden shadow-xl">
+        <div class="p-5 border-b border-brand-800 flex items-center justify-between flex-wrap gap-4">
+          <div class="flex items-center space-x-3">
+            <div class="w-3 h-3 rounded-full bg-red-500 animate-ping"></div>
+            <h2 class="font-bold text-white text-base tracking-wide flex items-center space-x-2">
+              <span>PRIORITIZED ALERT QUEUE</span>
+              <span class="text-xs px-2 py-0.5 rounded bg-brand-800 text-slate-400 font-mono">Sorted by Severity Score (0-100)</span>
+            </h2>
+</div>
+<div class="flex items-center space-x-2">
+  <label for="alert-severity-filter" class="text-xs text-slate-400">Severity:</label>
+
+  <select id="alert-severity-filter"
+          onchange="refreshAlerts()"
+          class="px-3 py-1.5 bg-brand-950 border border-brand-700 text-slate-200 text-xs rounded-lg">
+    <option value="all">All Severities</option>
+    <option value="critical">Critical</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+  </select>
+
+  <button onclick="refreshAlerts()" class="px-3 py-1.5 bg-brand-850 hover:bg-brand-800 border border-brand-700 text-slate-200 text-xs rounded-lg flex items-center space-x-1.5 transition-colors">
+    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-brand-accent"></i>
+    <span>Refresh Queue</span>
+  </button>
+</div>
+<button onclick="openManualIocModal()" class="px-3 py-1.5 bg-brand-accent hover:bg-sky-400 text-brand-950 font-semibold text-xs rounded-lg flex items-center space-x-1.5 transition-colors">
+              <i data-lucide="plus-circle" class="w-3.5 h-3.5"></i>
+              <span>New Indicator</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-brand-950 text-slate-400 font-mono uppercase border-b border-brand-800">
+              <tr>
+                <th class="py-3 px-4">Severity / Score</th>
+                <th class="py-3 px-4">Alert Title & Target IOC</th>
+                <th class="py-3 px-4">Correlation / Sightings</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Detected At</th>
+                <th class="py-3 px-4 text-right">Inline Triage Actions</th>
+              </tr>
+            </thead>
+            <tbody id="alerts-table-body" class="divide-y divide-brand-800/60 font-mono">
+              <!-- Rendered dynamically -->
+              <tr>
+                <td colspan="6" class="py-12 text-center text-slate-500">
+                  <div class="inline-block animate-spin rounded-full h-6 w-6 border-2 border-brand-accent border-t-transparent mb-2"></div>
+                  <div>Loading live alerts queue...</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Quick Indicator Explorer Table -->
+      <div class="bg-brand-900 border border-brand-800 rounded-xl overflow-hidden shadow-xl">
+        <div class="p-5 border-b border-brand-800 flex items-center justify-between">
+          <h3 class="font-bold text-white text-sm tracking-wide flex items-center space-x-2">
+            <i data-lucide="database" class="w-4 h-4 text-brand-accent"></i>
+            <span>CANONICAL INDICATORS OF COMPROMISE (DEDUPLICATED)</span>
+          </h3>
+          <span class="text-xs text-slate-400 font-mono" id="ioc-count-label">Loading indicators...</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-brand-950 text-slate-400 font-mono uppercase border-b border-brand-800">
+              <tr>
+                <th class="py-3 px-4">Type</th>
+                <th class="py-3 px-4">Indicator Value</th>
+                <th class="py-3 px-4">Score (0-100)</th>
+                <th class="py-3 px-4">Confidence</th>
+                <th class="py-3 px-4">Sources Provenance</th>
+                <th class="py-3 px-4">TLP</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="iocs-table-body" class="divide-y divide-brand-800/60 font-mono">
+              <!-- Rendered dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ========================================== -->
+    <!-- 2. EXECUTIVE OVERVIEW (RACHEL ADEYEMI - CISO) -->
+    <!-- ========================================== -->
+    <section id="view-executive" class="view-panel space-y-6 hidden">
+      <!-- Exposure Gauge & Risk Posture -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-6 flex flex-col items-center justify-center text-center relative overflow-hidden">
+          <div class="absolute -top-10 -right-10 w-36 h-36 bg-red-500/10 rounded-full blur-2xl"></div>
+          <span class="text-xs text-slate-400 uppercase tracking-widest font-semibold mb-2">Threat Exposure Index</span>
+          <div class="relative w-40 h-40 flex items-center justify-center">
+            <svg class="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="40" stroke="#172342" stroke-width="8" fill="transparent" />
+              <circle id="exec-gauge-circle" cx="50" cy="50" r="40" stroke="#ef4444" stroke-width="8" stroke-dasharray="251.2" stroke-dashoffset="65" stroke-linecap="round" fill="transparent" class="transition-all duration-1000" />
+            </svg>
+            <div class="absolute flex flex-col items-center">
+              <span id="exec-score" class="text-4xl font-bold font-mono text-white">78</span>
+              <span class="text-[10px] text-slate-400 uppercase">/ 100</span>
+            </div>
+          </div>
+          <div id="exec-exposure-badge" class="mt-4 px-3 py-1 bg-red-500/20 text-red-400 text-xs font-semibold rounded-full border border-red-500/30">
+            ELEVATED THREAT POSTURE
+          </div>
+          <p class="text-xs text-slate-400 mt-2 max-w-xs">Derived from internal sightings, active botnet C2 activity, and corroborated zero-day CVE exposure.</p>
+        </div>
+
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-6 md:col-span-2">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
+              <i data-lucide="bar-chart-3" class="w-4 h-4 text-brand-accent"></i>
+              <span>30-Day Threat Incident Trend</span>
+            </h3>
+            <span class="text-xs text-slate-400 font-mono">By Severity Distribution</span>
+          </div>
+          <div class="h-60">
+            <canvas id="trendChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Category Breakdown & Top Targeted Assets -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-6">
+          <h3 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center space-x-2">
+            <i data-lucide="pie-chart" class="w-4 h-4 text-emerald-400"></i>
+            <span>Threat Vector Classification</span>
+          </h3>
+          <div class="h-56 flex items-center justify-center">
+            <canvas id="categoryChart"></canvas>
+          </div>
+        </div>
+
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-6">
+          <h3 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center space-x-2">
+            <i data-lucide="target" class="w-4 h-4 text-purple-400"></i>
+            <span>Top Targeted Geographies & Exposure</span>
+          </h3>
+          <div class="space-y-3" id="exec-geo-list">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ========================================== -->
+    <!-- 3. INCIDENT RESPONSE (DANIEL OKAFOR) -->
+    <!-- ========================================== -->
+    <section id="view-incidents" class="view-panel space-y-6 hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Incidents List -->
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold text-white text-sm uppercase tracking-wider flex items-center space-x-2">
+              <i data-lucide="alert-octagon" class="w-4 h-4 text-red-400"></i>
+              <span>Active Incidents</span>
+            </h3>
+            <span class="text-xs bg-brand-800 px-2 py-0.5 rounded text-slate-300 font-mono" id="incident-count-tag">1 Open</span>
+          </div>
+          <div class="space-y-3" id="incidents-list-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+
+        <!-- Incident Workspace & Interactive Containment -->
+        <div class="bg-brand-900 border border-brand-800 rounded-xl p-6 lg:col-span-2 space-y-6">
+          <div class="border-b border-brand-800 pb-4 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <div class="flex items-center space-x-2">
+                <span id="active-inc-badge" class="px-2 py-0.5 rounded text-xs font-bold uppercase bg-red-500/20 text-red-400 border border-red-500/30">CRITICAL</span>
+                <h2 id="active-inc-title" class="text-lg font-bold text-white">Incident: Outbound Cobalt Strike Beaconing Detected</h2>
+              </div>
+              <p id="active-inc-desc" class="text-xs text-slate-400 mt-1">Investigating correlation between perimeter firewall alert and malicious IP 185.220.101.4.</p>
+            </div>
+            <div class="flex items-center space-x-2">
+              <button onclick="resolveCurrentIncident()" class="px-3 py-1.5 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-xs font-semibold flex items-center space-x-1.5 transition-colors">
+                <i data-lucide="check-circle" class="w-4 h-4"></i>
+                <span>Mark Contained</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Containment Checklist -->
+          <div class="bg-brand-950 p-4 rounded-xl border border-brand-800 space-y-3">
+            <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
+              <i data-lucide="list-checks" class="w-4 h-4 text-brand-accent"></i>
+              <span>Containment & Remediation Checklist</span>
+            </h4>
+            <div class="space-y-2 text-xs" id="active-inc-checklist">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <!-- Chronological Immutable Incident Timeline -->
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
+                <i data-lucide="clock" class="w-4 h-4 text-amber-400"></i>
+                <span>Chronological Incident Timeline (Audit Backed)</span>
+              </h4>
+            </div>
+
+            <!-- Timeline Entries List -->
+            <div class="relative pl-6 space-y-4 border-l-2 border-brand-800 font-mono text-xs" id="incident-timeline-entries">
+              <!-- Rendered dynamically -->
+            </div>
+
+            <!-- Add Note Form -->
+            <div class="pt-2 flex items-center space-x-2">
+              <input
+                id="timeline-note-input"
+                type="text"
+                placeholder="Log forensic observation or remediation action..."
+                class="flex-1 bg-brand-950 border border-brand-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent"
+              />
+              <button onclick="addTimelineNote()" class="px-3 py-2 bg-brand-accent text-brand-950 font-bold rounded-lg text-xs hover:bg-sky-400 transition-colors">
+                Append Entry
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ========================================== -->
+    <!-- 4. THREAT HUNTING (MEI LIN TAN) -->
+    <!-- ========================================== -->
+    <section id="view-hunter" class="view-panel space-y-6 hidden">
+      <!-- Faceted Search Bar -->
+      <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
+            <i data-lucide="filter" class="w-4 h-4 text-brand-accent"></i>
+            <span>Threat Hunting Advanced Query & Facets</span>
+          </h3>
+          <span class="text-xs text-slate-400 font-mono">Sub-second full-text indexing</span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input
+            id="hunt-query"
+            type="text"
+            placeholder="Search keywords (e.g. Cobalt, Mirai, CVE)..."
+            class="bg-brand-950 border border-brand-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-brand-accent"
+          />
+          <select id="hunt-type" class="bg-brand-950 border border-brand-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none">
+            <option value="">All Indicator Types</option>
+            <option value="ip">IP Address</option>
+            <option value="domain">Domain Name</option>
+            <option value="url">URL</option>
+            <option value="hash_sha256">SHA-256 Hash</option>
+            <option value="cve">CVE</option>
+          </select>
+          <select id="hunt-min-score" class="bg-brand-950 border border-brand-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none">
+            <option value="0">Any Severity Score (0-100)</option>
+            <option value="50">Score ≥ 50 (Suspicious)</option>
+            <option value="75">Score ≥ 75 (High / Critical)</option>
+            <option value="90">Score ≥ 90 (Verified Threat)</option>
+          </select>
+          <button onclick="executeHuntSearch()" class="bg-brand-accent hover:bg-sky-400 text-brand-950 font-bold px-4 py-2 rounded-lg text-xs flex items-center justify-center space-x-2 transition-colors">
+            <i data-lucide="search" class="w-4 h-4"></i>
+            <span>Run Hunt Query</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- MITRE ATT&CK Matrix Technique Overlay -->
+      <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
+            <i data-lucide="grid" class="w-4 h-4 text-purple-400"></i>
+            <span>MITRE ATT&CK Technique Coverage Matrix</span>
+          </h3>
+          <span class="text-xs text-slate-400 font-mono">Techniques correlated in active intelligence</span>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-3" id="mitre-matrix-container">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+
+      <!-- Hunt Results Table -->
+      <div class="bg-brand-900 border border-brand-800 rounded-xl overflow-hidden shadow-xl">
+        <div class="p-4 border-b border-brand-800 flex items-center justify-between">
+          <span class="text-xs font-bold uppercase text-slate-300 font-mono" id="hunt-results-count">Results (0)</span>
+          <button onclick="exportHuntResults()" class="text-xs text-brand-accent hover:underline flex items-center space-x-1">
+            <i data-lucide="download" class="w-3.5 h-3.5"></i>
+            <span>Export Findings</span>
+          </button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-brand-950 text-slate-400 font-mono uppercase border-b border-brand-800">
+              <tr>
+                <th class="py-3 px-4">IOC Type</th>
+                <th class="py-3 px-4">Indicator Value</th>
+                <th class="py-3 px-4">Severity Score</th>
+                <th class="py-3 px-4">Tags & ATT&CK</th>
+                <th class="py-3 px-4">Description</th>
+                <th class="py-3 px-4">Last Reported</th>
+              </tr>
+            </thead>
+            <tbody id="hunt-table-body" class="divide-y divide-brand-800/60 font-mono">
+              <!-- Rendered dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ========================================== -->
+    <!-- 5. GLOBAL ATTACK HEATMAP (FR-20) -->
+    <!-- ========================================== -->
+    <section id="view-map" class="view-panel space-y-6 hidden">
+      <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
+              <i data-lucide="globe" class="w-4 h-4 text-emerald-400"></i>
+              <span>Global Threat Origin & Target Density Map</span>
+            </h3>
+            <p class="text-xs text-slate-400 mt-1">Live visualization of threat infrastructure geolocations, C2 nodes, and targeted regions.</p>
+          </div>
+          <button onclick="loadMapPoints()" class="px-3 py-1.5 bg-brand-850 hover:bg-brand-800 border border-brand-700 text-slate-200 text-xs rounded-lg flex items-center space-x-1.5">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-brand-accent"></i>
+            <span>Refresh Map Telemetry</span>
+          </button>
+        </div>
+
+        <div id="threat-map-container" class="w-full h-[520px] rounded-lg border border-brand-800 overflow-hidden relative z-0"></div>
+      </div>
+    </section>
+
+
+    <!-- ========================================== -->
+    <!-- 6. THREAT FEEDS MANAGEMENT -->
+    <!-- ========================================== -->
+    <section id="view-feeds" class="view-panel space-y-6 hidden">
+      <div class="bg-brand-900 border border-brand-800 rounded-xl p-5 flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
+            <i data-lucide="radio" class="w-4 h-4 text-brand-accent"></i>
+            <span>Connected Threat Intelligence Feeds (≥ 6 Sources)</span>
+          </h3>
+          <p class="text-xs text-slate-400 mt-1">Continuous multi-source ingestion with automated deduplication and provenance tracking.</p>
+        </div>
+        <button onclick="pollAllFeeds()" class="px-4 py-2 bg-brand-accent hover:bg-sky-400 text-brand-950 font-bold text-xs rounded-lg flex items-center space-x-1.5 transition-colors">
+          <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          <span>Poll All Feeds Now</span>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="feeds-cards-container">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+
+    <!-- ========================================== -->
+    <!-- 7. AUDIT & COMPLIANCE LOG (FR-27) -->
+    <!-- ========================================== -->
+    <section id="view-audit" class="view-panel space-y-6 hidden">
+      <div class="bg-brand-900 border border-brand-800 rounded-xl overflow-hidden shadow-xl">
+        <div class="p-5 border-b border-brand-800 flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
+            <i data-lucide="file-check" class="w-4 h-4 text-emerald-400"></i>
+            <span>Tamper-Evident Immutable Audit Trail (100% Coverage)</span>
+          </h3>
+          <button onclick="loadAuditLogs()" class="px-3 py-1.5 bg-brand-850 hover:bg-brand-800 border border-brand-700 text-slate-200 text-xs rounded-lg flex items-center space-x-1.5">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-brand-accent"></i>
+            <span>Refresh Audit Log</span>
+          </button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-brand-950 text-slate-400 font-mono uppercase border-b border-brand-800">
+              <tr>
+                <th class="py-3 px-4">Timestamp (UTC)</th>
+                <th class="py-3 px-4">Actor</th>
+                <th class="py-3 px-4">Action</th>
+                <th class="py-3 px-4">Entity Type</th>
+                <th class="py-3 px-4">Entity ID</th>
+                <th class="py-3 px-4">IP Address</th>
+                <th class="py-3 px-4">Details</th>
+              </tr>
+            </thead>
+            <tbody id="audit-table-body" class="divide-y divide-brand-800/60 font-mono">
+              <!-- Rendered dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+
+  <!-- INDICATOR DETAIL DRAWER MODAL -->
+  <div id="ioc-drawer" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex justify-end transition-opacity">
+    <div class="w-full max-w-xl bg-brand-900 border-l border-brand-800 h-full p-6 overflow-y-auto space-y-6 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-brand-800 pb-4">
+        <div class="flex items-center space-x-2">
+          <i data-lucide="shield-alert" class="w-5 h-5 text-brand-accent"></i>
+          <h3 class="text-base font-bold text-white uppercase tracking-wide">Indicator Intelligence File</h3>
+        </div>
+        <button onclick="closeIocDrawer()" class="p-1 rounded-lg hover:bg-brand-800 text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div id="drawer-content" class="space-y-6">
+        <!-- Dynamic Indicator Details Loaded Here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- MANUAL IOC MODAL -->
+  <div id="manual-ioc-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="w-full max-w-md bg-brand-900 border border-brand-800 rounded-xl p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-brand-800 pb-3">
+        <h3 class="text-sm font-bold text-white uppercase tracking-wider">Submit New Indicator of Compromise</h3>
+        <button onclick="closeManualIocModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 font-mono mb-1">Indicator Value</label>
+          <input id="new-ioc-val" type="text" placeholder="e.g. 195.123.44.12 or malware.exe" class="w-full bg-brand-950 border border-brand-800 rounded-lg p-2.5 text-white font-mono focus:border-brand-accent focus:outline-none" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-400 font-mono mb-1">Indicator Type</label>
+            <select id="new-ioc-type" class="w-full bg-brand-950 border border-brand-800 rounded-lg p-2 text-white font-mono">
+              <option value="ip">IP Address</option>
+              <option value="domain">Domain Name</option>
+              <option value="url">URL</option>
+              <option value="hash_sha256">SHA-256 Hash</option>
+              <option value="cve">CVE</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 font-mono mb-1">TLP Marking</label>
+            <select id="new-ioc-tlp" class="w-full bg-brand-950 border border-brand-800 rounded-lg p-2 text-white font-mono">
+              <option value="clear">TLP:CLEAR</option>
+              <option value="green">TLP:GREEN</option>
+              <option value="amber">TLP:AMBER</option>
+              <option value="red">TLP:RED</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-slate-400 font-mono mb-1">Initial Confidence (0-100)</label>
+          <input id="new-ioc-conf" type="number" min="0" max="100" value="85" class="w-full bg-brand-950 border border-brand-800 rounded-lg p-2 text-white font-mono" />
+        </div>
+        <div>
+          <label class="block text-slate-400 font-mono mb-1">Analyst Description & Context</label>
+          <textarea id="new-ioc-desc" rows="2" placeholder="Describe threat activity, origin, or internal sightings..." class="w-full bg-brand-950 border border-brand-800 rounded-lg p-2 text-white font-mono"></textarea>
+        </div>
+        <button onclick="submitManualIoc()" class="w-full bg-brand-accent hover:bg-sky-400 text-brand-950 font-bold py-2.5 rounded-lg transition-colors mt-2">
+          Add & Correlate Indicator
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- APPLICATION LOGIC JAVASCRIPT -->
+  <script src="/static/app.js"></script>
+</body>
+</html>

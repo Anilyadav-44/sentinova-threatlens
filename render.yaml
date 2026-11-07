@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: threatlens-cti
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: PROJECT_NAME
+        value: ThreatLens CTI Platform
+      - key: VERSION
+        value: "1.0.0"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "7"

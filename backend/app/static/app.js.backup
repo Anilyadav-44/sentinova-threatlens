@@ -1,0 +1,975 @@
+// ThreatLens Frontend Engine — Sentinova Security Systems
+
+const API_BASE = '/api/v1';
+let authToken = null;
+let currentUser = null;
+let trendChart = null;
+let categoryChart = null;
+let threatMap = null;
+let socket = null;
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', async () => {
+  lucide.createIcons();
+  setupPersonaSwitcher();
+  await authenticateAs('analyst'); // Default persona: Priya Nair
+  initWebSocket();
+  loadSocDashboard();
+  setupGlobalSearch();
+});
+
+// ==========================================
+// AUTHENTICATION & PERSONA MANAGEMENT
+// ==========================================
+async function authenticateAs(username) {
+  try {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username_or_email: username,
+        password: 'ThreatLens@2026!'
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      authToken = data.access_token;
+      currentUser = data.user;
+      showToast(`Switched persona to ${currentUser.full_name} (${currentUser.role})`, 'info');
+    }
+  } catch (err) {
+    console.error('Auth failed', err);
+  }
+}
+
+function setupPersonaSwitcher() {
+  const select = document.getElementById('persona-select');
+  select.addEventListener('change', async (e) => {
+    await authenticateAs(e.target.value);
+    // Reload active tab
+    const activeTab = document.querySelector('.tab-btn.border-brand-accent');
+    if (activeTab) activeTab.click();
+  });
+}
+
+function authHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+  };
+}
+
+// ==========================================
+// REAL-TIME WEBSOCKET GATEWAY
+// ==========================================
+function initWebSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws?channel=alerts.stream`;
+  
+  socket = new WebSocket(wsUrl);
+
+  socket.onopen = () => {
+    document.getElementById('ws-indicator').className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse';
+    document.getElementById('ws-text').innerText = 'LIVE STREAM';
+  };
+
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.event === 'alert.new') {
+        showToast(`🚨 High-Severity Alert: ${data.alert.title} (Score: ${data.alert.score})`, 'critical');
+        loadSocDashboard(); // Auto-refresh queue
+      } else if (data.event === 'alert.updated') {
+        loadSocDashboard();
+      }
+    } catch (e) {
+      console.log('WS msg', event.data);
+    }
+  };
+
+  socket.onclose = () => {
+    document.getElementById('ws-indicator').className = 'w-2.5 h-2.5 rounded-full bg-amber-500';
+    document.getElementById('ws-text').innerText = 'RECONNECTING';
+    setTimeout(initWebSocket, 3000);
+  };
+}
+
+// ==========================================
+// TOAST NOTIFICATIONS
+// ==========================================
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  const bg = type === 'critical' ? 'bg-red-950/90 border-red-500 text-red-200' :
+             type === 'warning' ? 'bg-amber-950/90 border-amber-500 text-amber-200' :
+             type === 'success' ? 'bg-emerald-950/90 border-emerald-500 text-emerald-200' :
+             'bg-brand-900/95 border-brand-accent text-slate-200';
+             
+  toast.className = `p-3.5 rounded-xl border text-xs font-mono shadow-2xl backdrop-blur-md transition-all duration-300 pointer-events-auto flex items-center space-x-2.5 ${bg}`;
+  toast.innerHTML = `
+    <span class="w-2 h-2 rounded-full ${type === 'critical' ? 'bg-red-400 animate-ping' : 'bg-brand-accent'}"></span>
+    <span class="flex-1">${message}</span>
+  `;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    setTimeout(() => toast.remove(), 300);
+  }, 4500);
+}
+
+// ==========================================
+// TAB SWITCHING
+// ==========================================
+function switchTab(tabId) {
+  document.querySelectorAll('.view-panel').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.remove('border-brand-accent', 'text-brand-accent');
+    btn.classList.add('border-transparent', 'text-slate-400');
+  });
+
+  const targetView = document.getElementById(`view-${tabId}`);
+  const targetTab = document.getElementById(`tab-${tabId}`);
+  if (targetView && targetTab) {
+    targetView.classList.remove('hidden');
+    targetTab.classList.add('border-brand-accent', 'text-brand-accent');
+    targetTab.classList.remove('border-transparent', 'text-slate-400');
+  }
+
+  // Load specific tab data
+  if (tabId === 'soc') loadSocDashboard();
+  if (tabId === 'executive') loadExecutiveDashboard();
+  if (tabId === 'incidents') loadIncidentsDashboard();
+  if (tabId === 'hunter') executeHuntSearch();
+  if (tabId === 'map') setTimeout(loadMapPoints, 100);
+  if (tabId === 'feeds') loadFeeds();
+  if (tabId === 'audit') loadAuditLogs();
+
+  lucide.createIcons();
+}
+
+// ==========================================
+// 1. SOC ANALYST LOGIC
+// ==========================================
+async function loadSocDashboard() {
+  try {
+    // 1. Load Stats
+    const statsRes = await fetch(`${API_BASE}/stats/soc`, { headers: authHeaders() });
+    if (statsRes.ok) {
+      const stats = await statsRes.json();
+      document.getElementById('soc-stat-new-alerts').innerText = stats.new_alerts;
+      document.getElementById('soc-stat-unassigned').innerText = stats.unassigned_alerts;
+      document.getElementById('soc-stat-critical').innerText = stats.critical_indicators;
+      document.getElementById('soc-stat-feeds').innerText = `${stats.active_feeds} / 6`;
+      document.getElementById('badge-alerts-count').innerText = stats.new_alerts;
+    }
+
+    // 2. Load Alerts Queue
+    await refreshAlerts();
+
+    // 3. Load Canonical Indicators List
+    await loadIndicatorsList();
+
+  } catch (err) {
+    console.error('Failed to load SOC dashboard', err);
+  }
+}
+
+async function refreshAlerts() {
+  const tbody = document.getElementById('alerts-table-body');
+  try {
+    const res = await fetch(`${API_BASE}/alerts?limit=50`, { headers: authHeaders() });
+    if (res.ok) {
+      const alerts = await res.json();
+      if (alerts.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-8 text-center text-slate-500">No active alerts in queue. System operational.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = alerts.map(a => {
+        const sevColor = a.severity === 'critical' ? 'text-red-400 bg-red-500/10 border-red-500/30' :
+                         a.severity === 'high' ? 'text-orange-400 bg-orange-500/10 border-orange-500/30' :
+                         a.severity === 'medium' ? 'text-amber-400 bg-amber-500/10 border-amber-500/30' :
+                         'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+        
+        const statusColor = a.status === 'new' ? 'text-red-400 font-bold' :
+                            a.status === 'acknowledged' ? 'text-sky-400' :
+                            a.status === 'in_progress' ? 'text-amber-400' : 'text-emerald-400';
+
+        const sightings = a.alert_metadata?.internal_sightings || 0;
+        const sightingsBadge = sightings > 0 ? 
+          `<span class="px-2 py-0.5 rounded bg-red-950 text-red-300 border border-red-800 text-[10px] font-bold">⚠️ ${sightings} SIGHTINGS</span>` :
+          `<span class="text-slate-500 text-[11px]">No internal match</span>`;
+
+        return `
+          <tr class="hover:bg-brand-850/60 transition-colors">
+            <td class="py-3 px-4">
+              <div class="flex items-center space-x-2">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${sevColor}">${a.severity}</span>
+                <span class="text-white font-bold font-mono">${a.score}/100</span>
+              </div>
+            </td>
+            <td class="py-3 px-4">
+              <div class="font-bold text-white tracking-wide">${a.title}</div>
+              <div class="text-[11px] text-slate-400 mt-0.5 line-clamp-1">${a.description || ''}</div>
+            </td>
+            <td class="py-3 px-4">${sightingsBadge}</td>
+            <td class="py-3 px-4 uppercase text-[11px] ${statusColor}">${a.status}</td>
+            <td class="py-3 px-4 text-slate-400 text-[11px]">${new Date(a.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
+            <td class="py-3 px-4 text-right">
+              <div class="flex items-center justify-end space-x-1.5">
+                ${a.status === 'new' ? `
+                  <button onclick="acknowledgeAlert('${a.id}')" class="px-2 py-1 bg-brand-800 hover:bg-brand-700 text-sky-300 rounded text-[11px] border border-brand-700">
+                    Ack
+                  </button>
+                ` : ''}
+                <button onclick="escalateAlert('${a.id}')" class="px-2 py-1 bg-red-900/60 hover:bg-red-800 text-red-200 rounded text-[11px] border border-red-700 flex items-center space-x-1">
+                  <span>Escalate</span>
+                </button>
+                ${a.indicator_id ? `
+                  <button onclick="viewIndicatorDetail('${a.indicator_id}')" class="px-2 py-1 bg-brand-850 hover:bg-brand-800 text-slate-300 rounded text-[11px] border border-brand-700">
+                    Inspect
+                  </button>
+                ` : ''}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-400">Failed to load alerts.</td></tr>`;
+  }
+}
+
+async function acknowledgeAlert(alertId) {
+  try {
+    const res = await fetch(`${API_BASE}/alerts/${alertId}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ status: 'acknowledged' })
+    });
+    if (res.ok) {
+      showToast('Alert acknowledged by analyst', 'success');
+      loadSocDashboard();
+    }
+  } catch (e) {
+    showToast('Failed to acknowledge alert', 'critical');
+  }
+}
+
+async function escalateAlert(alertId) {
+  try {
+    const res = await fetch(`${API_BASE}/alerts/${alertId}/escalate`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (res.ok) {
+      showToast('Alert escalated into active incident workspace!', 'critical');
+      switchTab('incidents');
+    }
+  } catch (e) {
+    showToast('Failed to escalate alert', 'critical');
+  }
+}
+
+async function loadIndicatorsList() {
+  const tbody = document.getElementById('iocs-table-body');
+  try {
+    const res = await fetch(`${API_BASE}/indicators?page=1&page_size=20`, { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      document.getElementById('ioc-count-label').innerText = `${data.total} canonical indicators indexed`;
+      tbody.innerHTML = data.items.map(ind => {
+        const scoreBg = ind.severity_score >= 80 ? 'text-red-400 bg-red-500/10' :
+                        ind.severity_score >= 50 ? 'text-amber-400 bg-amber-500/10' : 'text-emerald-400 bg-emerald-500/10';
+        const sourcesCount = ind.sources ? ind.sources.length : 1;
+        const tags = ind.tags?.map(t => `<span class="px-1.5 py-0.5 rounded bg-brand-800 text-sky-300 text-[10px] mr-1">${t.name}</span>`).join('') || '';
+
+        return `
+          <tr class="hover:bg-brand-850/60 cursor-pointer" onclick="viewIndicatorDetail('${ind.id}')">
+            <td class="py-3 px-4 uppercase text-[10px] font-bold text-slate-400">${ind.type}</td>
+            <td class="py-3 px-4 font-bold text-white font-mono flex items-center space-x-2">
+              <span>${ind.value}</span>
+            </td>
+            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded font-mono font-bold text-xs ${scoreBg}">${ind.severity_score}/100</span></td>
+            <td class="py-3 px-4 font-mono text-slate-300">${ind.confidence}%</td>
+            <td class="py-3 px-4 text-slate-300">${sourcesCount} distinct feed(s)</td>
+            <td class="py-3 px-4"><span class="px-1.5 py-0.5 rounded uppercase text-[10px] font-mono bg-brand-800 text-slate-300">${ind.tlp}</span></td>
+            <td class="py-3 px-4 uppercase text-[10px] text-emerald-400 font-bold">${ind.status}</td>
+            <td class="py-3 px-4 text-right">
+              <button onclick="event.stopPropagation(); viewIndicatorDetail('${ind.id}')" class="text-xs text-brand-accent hover:underline">
+                Inspect →
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  } catch (e) {
+    console.error('Failed to load indicators', e);
+  }
+}
+
+// Indicator Detail Drawer (Inspection & Scoring Breakdown)
+async function viewIndicatorDetail(iocId) {
+  const drawer = document.getElementById('ioc-drawer');
+  const content = document.getElementById('drawer-content');
+  drawer.classList.remove('hidden');
+
+  content.innerHTML = `<div class="p-8 text-center text-slate-400"><div class="inline-block animate-spin rounded-full h-6 w-6 border-2 border-brand-accent border-t-transparent mb-2"></div><div>Correlating intelligence record...</div></div>`;
+
+  try {
+    const res = await fetch(`${API_BASE}/indicators/${iocId}`, { headers: authHeaders() });
+    if (res.ok) {
+      const ind = await res.json();
+      const score = ind.severity_score;
+      const breakdown = ind.ioc_metadata?.scoring_breakdown || {};
+      const sightings = ind.ioc_metadata?.internal_sightings_count || 0;
+
+      content.innerHTML = `
+        <div class="space-y-4 font-mono">
+          <!-- Main Header -->
+          <div class="p-4 rounded-xl bg-brand-950 border border-brand-800">
+            <div class="flex items-center justify-between mb-2">
+              <span class="px-2 py-0.5 rounded uppercase text-xs font-bold bg-brand-800 text-sky-300">${ind.type}</span>
+              <span class="px-2 py-0.5 rounded uppercase text-xs font-bold ${score >= 80 ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}">
+                Severity Score: ${score}/100
+              </span>
+            </div>
+            <div class="text-base font-bold text-white break-all">${ind.value}</div>
+            <p class="text-xs text-slate-400 mt-2 font-sans">${ind.description || 'No analyst notes.'}</p>
+          </div>
+
+          <!-- Internal Sightings Alert Panel (FR-16) -->
+          <div class="p-4 rounded-xl ${sightings > 0 ? 'bg-red-950/60 border border-red-800' : 'bg-brand-950 border border-brand-800'}">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase tracking-wide text-slate-300">Internal Network Sightings</span>
+              <span class="text-xs font-bold ${sightings > 0 ? 'text-red-400' : 'text-slate-500'}">${sightings} Matched Events</span>
+            </div>
+            <p class="text-xs text-slate-400 font-sans mt-1">
+              ${sightings > 0 ? '⚠️ This external indicator has matched active network firewall or EDR event telemetry!' : 'No internal network sightings observed yet.'}
+            </p>
+          </div>
+
+          <!-- Formulaic 0-100 Scoring Breakdown (FR-13) -->
+          <div class="p-4 rounded-xl bg-brand-950 border border-brand-800 space-y-2">
+            <span class="text-xs font-bold uppercase tracking-wide text-brand-accent">Formulaic Scoring Factors (FR-13)</span>
+            <div class="text-xs space-y-1.5 pt-1">
+              <div class="flex justify-between text-slate-300">
+                <span>Base Reputation (40% weight):</span>
+                <span class="text-white font-bold">${breakdown.reputation_component || 0} pts</span>
+              </div>
+              <div class="flex justify-between text-slate-300">
+                <span>Source Corroboration (25% weight):</span>
+                <span class="text-white font-bold">${breakdown.source_component || 0} pts</span>
+              </div>
+              <div class="flex justify-between text-slate-300">
+                <span>Recency Decay (15% weight):</span>
+                <span class="text-white font-bold">${breakdown.recency_component || 0} pts</span>
+              </div>
+              <div class="flex justify-between text-slate-300">
+                <span>Internal Sightings (20% weight):</span>
+                <span class="text-white font-bold">${breakdown.internal_sightings_component || 0} pts</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Multi-Source Provenance List (FR-03) -->
+          <div class="p-4 rounded-xl bg-brand-950 border border-brand-800 space-y-3">
+            <span class="text-xs font-bold uppercase tracking-wide text-slate-300">Multi-Source Provenance (${ind.sources?.length || 0})</span>
+            <div class="space-y-2">
+              ${ind.sources?.map(s => `
+                <div class="p-2.5 rounded bg-brand-900 border border-brand-800 text-xs flex items-center justify-between">
+                  <div>
+                    <span class="font-bold text-white">${s.feed_name}</span>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Reported: ${new Date(s.last_reported).toLocaleDateString()}</div>
+                  </div>
+                  <span class="text-sky-400 font-bold">Conf: ${s.source_confidence}%</span>
+                </div>
+              `).join('') || '<div class="text-slate-500 text-xs">No provenance recorded.</div>'}
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="grid grid-cols-2 gap-3 pt-2">
+            <button onclick="whitelistIndicator('${ind.id}')" class="py-2.5 bg-brand-850 hover:bg-brand-800 border border-brand-700 text-slate-200 text-xs font-bold rounded-lg transition-colors">
+              Whitelist Indicator
+            </button>
+            <button onclick="expireIndicator('${ind.id}')" class="py-2.5 bg-red-900/60 hover:bg-red-800 border border-red-700 text-red-200 text-xs font-bold rounded-lg transition-colors">
+              Age Out / Expire
+            </button>
+          </div>
+        </div>
+      `;
+    }
+  } catch (e) {
+    content.innerHTML = `<div class="p-4 text-center text-red-400">Failed to load indicator detail.</div>`;
+  }
+}
+
+function closeIocDrawer() {
+  document.getElementById('ioc-drawer').classList.add('hidden');
+}
+
+async function whitelistIndicator(id) {
+  try {
+    await fetch(`${API_BASE}/indicators/${id}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ status: 'whitelisted' })
+    });
+    showToast('Indicator added to whitelist', 'success');
+    closeIocDrawer();
+    loadSocDashboard();
+  } catch (e) {
+    showToast('Failed to update indicator', 'critical');
+  }
+}
+
+async function expireIndicator(id) {
+  try {
+    await fetch(`${API_BASE}/indicators/${id}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ status: 'expired' })
+    });
+    showToast('Indicator expired from active list', 'info');
+    closeIocDrawer();
+    loadSocDashboard();
+  } catch (e) {
+    showToast('Failed to expire indicator', 'critical');
+  }
+}
+
+// Manual IOC Submission Modal
+function openManualIocModal() {
+  document.getElementById('manual-ioc-modal').classList.remove('hidden');
+}
+function closeManualIocModal() {
+  document.getElementById('manual-ioc-modal').classList.add('hidden');
+}
+async function submitManualIoc() {
+  const val = document.getElementById('new-ioc-val').value.trim();
+  const type = document.getElementById('new-ioc-type').value;
+  const tlp = document.getElementById('new-ioc-tlp').value;
+  const conf = parseInt(document.getElementById('new-ioc-conf').value) || 80;
+  const desc = document.getElementById('new-ioc-desc').value.trim();
+
+  if (!val) {
+    showToast('Indicator value is required', 'warning');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/indicators`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        value: val,
+        type: type,
+        tlp: tlp,
+        confidence: conf,
+        severity_score: conf,
+        description: desc
+      })
+    });
+    if (res.ok) {
+      showToast(`Indicator ${val} added and correlated!`, 'success');
+      closeManualIocModal();
+      loadSocDashboard();
+    } else {
+      showToast('Error adding indicator (may already exist)', 'warning');
+    }
+  } catch (e) {
+    showToast('Failed to submit indicator', 'critical');
+  }
+}
+
+// ==========================================
+// 2. EXECUTIVE DASHBOARD (RACHEL ADEYEMI - CISO)
+// ==========================================
+async function loadExecutiveDashboard() {
+  try {
+    const res = await fetch(`${API_BASE}/stats/executive`, { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      
+      // Update Gauge
+      document.getElementById('exec-score').innerText = data.threat_exposure_index;
+      const circle = document.getElementById('exec-gauge-circle');
+      // circumference = 2 * PI * 40 ~= 251.2
+      const offset = 251.2 - (251.2 * data.threat_exposure_index / 100);
+      circle.style.strokeDashoffset = offset;
+      
+      const badge = document.getElementById('exec-exposure-badge');
+      badge.innerText = `${data.exposure_status.toUpperCase()} THREAT POSTURE`;
+
+      // 30-Day Trend Chart (Chart.js)
+      renderTrendChart(data.trend_30_days);
+
+      // Category Breakdown Doughnut Chart
+      renderCategoryChart(data.categories);
+
+      // Geo Targeting List
+      const geoContainer = document.getElementById('exec-geo-list');
+      geoContainer.innerHTML = data.geo_targeting.map(g => `
+        <div class="flex items-center justify-between p-3 rounded-lg bg-brand-950 border border-brand-800 text-xs font-mono">
+          <div class="flex items-center space-x-2">
+            <span class="w-6 h-6 rounded bg-brand-800 flex items-center justify-center font-bold text-white text-[10px]">${g.code}</span>
+            <span class="font-bold text-white font-sans">${g.country}</span>
+          </div>
+          <div class="flex items-center space-x-3">
+            <span class="text-slate-400">${g.incidents} Incidents</span>
+            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold ${g.risk === 'High' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'}">${g.risk}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Failed to load executive dashboard', e);
+  }
+}
+
+function renderTrendChart(trendData) {
+  const ctx = document.getElementById('trendChart').getContext('2d');
+  if (trendChart) trendChart.destroy();
+
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: trendData.map(t => t.date),
+      datasets: [
+        {
+          label: 'Critical Threats',
+          data: trendData.map(t => t.critical),
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+          tension: 0.3,
+          fill: true
+        },
+        {
+          label: 'High Severity',
+          data: trendData.map(t => t.high),
+          borderColor: '#f97316',
+          backgroundColor: 'transparent',
+          tension: 0.3
+        },
+        {
+          label: 'Medium Severity',
+          data: trendData.map(t => t.medium),
+          borderColor: '#f59e0b',
+          backgroundColor: 'transparent',
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { family: 'JetBrains Mono', size: 10 } } }
+      },
+      scales: {
+        x: { grid: { color: '#172342' }, ticks: { color: '#64748b', font: { size: 10 } } },
+        y: { grid: { color: '#172342' }, ticks: { color: '#64748b', font: { size: 10 } } }
+      }
+    }
+  });
+}
+
+function renderCategoryChart(categories) {
+  const ctx = document.getElementById('categoryChart').getContext('2d');
+  if (categoryChart) categoryChart.destroy();
+
+  categoryChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: categories.map(c => c.category),
+      datasets: [{
+        data: categories.map(c => c.count),
+        backgroundColor: ['#ef4444', '#38bdf8', '#10b981', '#a855f7', '#f59e0b', '#ec4899'],
+        borderColor: '#0d1527',
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right', labels: { color: '#cbd5e1', font: { family: 'JetBrains Mono', size: 11 } } }
+      }
+    }
+  });
+}
+
+// ==========================================
+// 3. INCIDENT RESPONSE (DANIEL OKAFOR)
+// ==========================================
+let currentIncidentId = null;
+
+async function loadIncidentsDashboard() {
+  const listContainer = document.getElementById('incidents-list-container');
+  try {
+    const res = await fetch(`${API_BASE}/incidents`, { headers: authHeaders() });
+    if (res.ok) {
+      const incidents = await res.json();
+      document.getElementById('incident-count-tag').innerText = `${incidents.length} Active`;
+      
+      if (incidents.length === 0) {
+        listContainer.innerHTML = `<div class="p-4 text-center text-slate-500 text-xs">No active incidents.</div>`;
+        return;
+      }
+
+      listContainer.innerHTML = incidents.map((inc, i) => `
+        <div onclick="selectIncident('${inc.id}')" class="p-3.5 rounded-xl border border-brand-800 bg-brand-950 hover:bg-brand-850 cursor-pointer transition-all ${i === 0 ? 'ring-1 ring-brand-accent' : ''}">
+          <div class="flex items-center justify-between mb-1">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-500/20 text-red-400">${inc.severity}</span>
+            <span class="text-[10px] uppercase font-mono text-slate-400">${inc.status}</span>
+          </div>
+          <h4 class="font-bold text-white text-xs line-clamp-1">${inc.title}</h4>
+          <span class="text-[10px] text-slate-500 font-mono mt-1 block">Opened: ${new Date(inc.created_at).toLocaleDateString()}</span>
+        </div>
+      `).join('');
+
+      // Auto-select first incident
+      if (incidents.length > 0) {
+        selectIncident(incidents[0].id);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load incidents', e);
+  }
+}
+
+async function selectIncident(incId) {
+  currentIncidentId = incId;
+  try {
+    const res = await fetch(`${API_BASE}/incidents/${incId}`, { headers: authHeaders() });
+    if (res.ok) {
+      const inc = await res.json();
+      document.getElementById('active-inc-title').innerText = inc.title;
+      document.getElementById('active-inc-desc').innerText = inc.description || '';
+      document.getElementById('active-inc-badge').innerText = inc.severity.toUpperCase();
+
+      // Render Checklist
+      const checkContainer = document.getElementById('active-inc-checklist');
+      checkContainer.innerHTML = (inc.containment_checklist || []).map((c, idx) => `
+        <label class="flex items-center space-x-2.5 p-2 rounded bg-brand-900 border border-brand-800 hover:bg-brand-850 cursor-pointer">
+          <input type="checkbox" ${c.done ? 'checked' : ''} onchange="toggleChecklistStep(${idx}, this.checked)" class="rounded bg-brand-950 border-brand-700 text-brand-accent focus:ring-0">
+          <span class="${c.done ? 'line-through text-slate-500' : 'text-slate-200 font-medium'}">${c.step}</span>
+        </label>
+      `).join('');
+
+      // Render Timeline
+      const timeContainer = document.getElementById('incident-timeline-entries');
+      timeContainer.innerHTML = (inc.timeline_entries || []).map(t => `
+        <div class="relative group">
+          <div class="absolute -left-[31px] top-1.5 w-2.5 h-2.5 rounded-full bg-brand-accent border-2 border-brand-950"></div>
+          <div class="text-[11px] text-brand-accent font-bold">${t.title}</div>
+          <p class="text-slate-400 font-sans mt-0.5 text-xs">${t.description || ''}</p>
+          <div class="text-[10px] text-slate-500 mt-1 flex items-center space-x-2">
+            <span>By: ${t.source_user}</span>
+            <span>•</span>
+            <span>${new Date(t.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Failed to load incident detail', e);
+  }
+}
+
+async function addTimelineNote() {
+  const input = document.getElementById('timeline-note-input');
+  const note = input.value.trim();
+  if (!note || !currentIncidentId) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/incidents/${currentIncidentId}/timeline`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        title: 'Forensic Observation',
+        description: note,
+        event_type: 'analyst_note'
+      })
+    });
+    if (res.ok) {
+      input.value = '';
+      showToast('Forensic entry added to incident timeline', 'success');
+      selectIncident(currentIncidentId);
+    }
+  } catch (e) {
+    showToast('Failed to append timeline note', 'critical');
+  }
+}
+
+async function resolveCurrentIncident() {
+  if (!currentIncidentId) return;
+  try {
+    await fetch(`${API_BASE}/incidents/${currentIncidentId}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ status: 'contained' })
+    });
+    showToast('Incident marked contained and secured', 'success');
+    loadIncidentsDashboard();
+  } catch (e) {
+    showToast('Failed to update incident', 'critical');
+  }
+}
+
+// ==========================================
+// 4. THREAT HUNTING (MEI LIN TAN)
+// ==========================================
+async function executeHuntSearch() {
+  const q = document.getElementById('hunt-query')?.value || '';
+  const type = document.getElementById('hunt-type')?.value || '';
+  const minScore = document.getElementById('hunt-min-score')?.value || '0';
+  const tbody = document.getElementById('hunt-table-body');
+  const resultsCount = document.getElementById('hunt-results-count');
+
+  let url = `${API_BASE}/search?limit=50&min_score=${minScore}`;
+  if (q) url += `&q=${encodeURIComponent(q)}`;
+  if (type) url += `&type=${type}`;
+
+  try {
+    const res = await fetch(url, { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      resultsCount.innerText = `Matching IOCs (${data.total_hits})`;
+      
+      tbody.innerHTML = data.results.map(r => `
+        <tr class="hover:bg-brand-850/60 cursor-pointer" onclick="viewIndicatorDetail('${r.id}')">
+          <td class="py-3 px-4 uppercase text-[10px] font-bold text-slate-400">${r.type}</td>
+          <td class="py-3 px-4 font-bold text-white font-mono">${r.value}</td>
+          <td class="py-3 px-4"><span class="px-2 py-0.5 rounded font-mono font-bold text-xs ${r.severity_score >= 80 ? 'text-red-400 bg-red-500/10' : 'text-amber-400 bg-amber-500/10'}">${r.severity_score}/100</span></td>
+          <td class="py-3 px-4">
+            ${r.tags?.map(t => `<span class="px-1.5 py-0.5 rounded bg-brand-800 text-sky-300 text-[10px] mr-1">${t.name}</span>`).join('') || ''}
+          </td>
+          <td class="py-3 px-4 text-slate-400 font-sans line-clamp-1">${r.description || ''}</td>
+          <td class="py-3 px-4 text-slate-500 text-[11px]">${new Date(r.last_seen).toLocaleDateString()}</td>
+        </tr>
+      `).join('');
+
+      // Load ATT&CK Matrix Overlay
+      loadAttackMatrix();
+    }
+  } catch (e) {
+    console.error('Hunt search failed', e);
+  }
+}
+
+async function loadAttackMatrix() {
+  const container = document.getElementById('mitre-matrix-container');
+  try {
+    const res = await fetch(`${API_BASE}/stats/attack-matrix`, { headers: authHeaders() });
+    if (res.ok) {
+      const list = await res.json();
+      container.innerHTML = list.map(m => `
+        <div class="p-3 rounded-lg bg-brand-950 border border-brand-800 text-xs font-mono space-y-1">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider">${m.tactic}</div>
+          <div class="font-bold text-white">${m.technique_id}</div>
+          <div class="text-[11px] text-slate-300 line-clamp-1">${m.name}</div>
+          <div class="pt-1 flex items-center justify-between text-[10px]">
+            <span class="text-brand-accent font-bold">${m.count} IOCs</span>
+            <span class="w-2 h-2 rounded-full" style="background-color: ${m.color}"></span>
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Failed to load ATT&CK matrix', e);
+  }
+}
+
+// ==========================================
+// 5. GLOBAL ATTACK HEATMAP (LEAFLET)
+// ==========================================
+async function loadMapPoints() {
+  const container = document.getElementById('threat-map-container');
+  if (!threatMap) {
+    threatMap = L.map('threat-map-container', {
+      zoomControl: true,
+      attributionControl: false
+    }).setView([20, 0], 2);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 18,
+    }).addTo(threatMap);
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/stats/heatmap`, { headers: authHeaders() });
+    if (res.ok) {
+      const points = await res.json();
+      points.forEach(p => {
+        const radius = Math.max(12, p.count / 3);
+        const circle = L.circleMarker([p.lat, p.lng], {
+          radius: radius,
+          fillColor: '#ef4444',
+          color: '#f87171',
+          weight: 1.5,
+          opacity: 0.9,
+          fillOpacity: 0.6
+        }).addTo(threatMap);
+
+        circle.bindPopup(`
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #0f172a; padding: 4px;">
+            <strong>${p.city}, ${p.country}</strong><br/>
+            <span>Type: ${p.type}</span><br/>
+            <span>Indicators: ${p.count}</span>
+          </div>
+        `);
+      });
+      threatMap.invalidateSize();
+    }
+  } catch (e) {
+    console.error('Heatmap load failed', e);
+  }
+}
+
+// ==========================================
+// 6. THREAT FEEDS MANAGEMENT
+// ==========================================
+async function loadFeeds() {
+  const container = document.getElementById('feeds-cards-container');
+  try {
+    const res = await fetch(`${API_BASE}/feeds`, { headers: authHeaders() });
+    if (res.ok) {
+      const feeds = await res.json();
+      container.innerHTML = feeds.map(f => {
+        const statusColor = f.last_status === 'success' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                            f.last_status === 'in_progress' ? 'bg-sky-500/20 text-sky-400 border-sky-500/30' :
+                            'bg-slate-500/20 text-slate-400 border-slate-500/30';
+        return `
+          <div class="p-5 rounded-xl bg-brand-900 border border-brand-800 space-y-4 shadow-xl">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-2">
+                <i data-lucide="radio" class="w-4 h-4 text-brand-accent"></i>
+                <h4 class="font-bold text-white text-sm">${f.display_name}</h4>
+              </div>
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono border ${statusColor}">
+                ${f.last_status}
+              </span>
+            </div>
+            <p class="text-xs text-slate-400 line-clamp-2 font-sans">${f.description || f.source_url}</p>
+            <div class="pt-2 border-t border-brand-800 flex items-center justify-between text-xs font-mono">
+              <div>
+                <span class="text-slate-500 text-[10px]">Ingested IOCs</span>
+                <div class="font-bold text-white">${f.total_indicators_ingested}</div>
+              </div>
+              <button onclick="pollSingleFeed('${f.name}')" class="px-3 py-1.5 bg-brand-850 hover:bg-brand-800 border border-brand-700 text-sky-300 rounded text-xs transition-colors flex items-center space-x-1">
+                <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+                <span>Poll Now</span>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+      lucide.createIcons();
+    }
+  } catch (e) {
+    console.error('Failed to load feeds', e);
+  }
+}
+
+async function pollSingleFeed(feedName) {
+  showToast(`Polling feed ${feedName} in background...`, 'info');
+  try {
+    const res = await fetch(`${API_BASE}/feeds/${feedName}/poll`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (res.ok) {
+      const data = await res.json();
+      showToast(`Feed ${feedName} updated! Ingested ${data.ingested_count} IOCs in ${data.duration_seconds}s`, 'success');
+      loadFeeds();
+    }
+  } catch (e) {
+    showToast(`Failed to poll ${feedName}`, 'critical');
+  }
+}
+
+async function pollAllFeeds() {
+  showToast('Triggering batch polling across all 6 threat feeds...', 'info');
+  try {
+    const res = await fetch(`${API_BASE}/feeds/poll-all`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (res.ok) {
+      showToast('All 6 feeds synchronized successfully!', 'success');
+      loadFeeds();
+      loadSocDashboard();
+    }
+  } catch (e) {
+    showToast('Failed to poll all feeds', 'critical');
+  }
+}
+
+// ==========================================
+// 7. AUDIT LOG (100% COVERAGE)
+// ==========================================
+async function loadAuditLogs() {
+  const tbody = document.getElementById('audit-table-body');
+  try {
+    const res = await fetch(`${API_BASE}/audit?limit=100`, { headers: authHeaders() });
+    if (res.ok) {
+      const logs = await res.json();
+      tbody.innerHTML = logs.map(l => `
+        <tr class="hover:bg-brand-850/60 font-mono text-[11px]">
+          <td class="py-2.5 px-4 text-slate-400">${new Date(l.created_at).toISOString()}</td>
+          <td class="py-2.5 px-4 font-bold text-white">${l.actor_username}</td>
+          <td class="py-2.5 px-4 text-brand-accent font-bold">${l.action}</td>
+          <td class="py-2.5 px-4 uppercase text-slate-400">${l.entity_type}</td>
+          <td class="py-2.5 px-4 text-slate-300 break-all">${l.entity_id || '—'}</td>
+          <td class="py-2.5 px-4 text-slate-500">${l.ip_address || '127.0.0.1'}</td>
+          <td class="py-2.5 px-4 text-slate-400 font-sans line-clamp-1">${JSON.stringify(l.details || {})}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-red-400">Failed to load audit records.</td></tr>`;
+  }
+}
+
+// ==========================================
+// EXPORT UTILITIES (FR-24)
+// ==========================================
+function exportSTIX() {
+  window.open(`${API_BASE}/export/stix`, '_blank');
+  showToast('Exporting active intelligence as STIX 2.1 JSON bundle...', 'info');
+}
+
+function exportCSV() {
+  window.location.href = `${API_BASE}/export/csv`;
+  showToast('Downloading canonical indicators CSV export...', 'info');
+}
+
+function exportHuntResults() {
+  exportCSV();
+}
+
+// Global search hotkey
+function setupGlobalSearch() {
+  const input = document.getElementById('global-search-input');
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== input) {
+      e.preventDefault();
+      input.focus();
+    }
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const q = input.value.trim();
+      if (q) {
+        document.getElementById('hunt-query').value = q;
+        switchTab('hunter');
+        executeHuntSearch();
+      }
+    }
+  });
+}
